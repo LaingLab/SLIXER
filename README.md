@@ -16,6 +16,8 @@ See it, program it, and let the camera tell it when.
 [**User guide**](slixer/README.md) ·
 [**Vision**](slixer/VISION.md)
 
+![Slixer's 3D view of the arm beside the real SO-101, moving together](docs/arm.gif)
+
 </div>
 
 ---
