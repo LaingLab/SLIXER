@@ -86,18 +86,22 @@ left alone, so this fixes a bad range without redoing a full calibration.
 | `?` | list the keys |
 
 **Centring (`h`/`H`) is only needed when a joint's travel crosses the encoder's 0/4095 seam**, which shows
-up as that joint sweeping nearly 4095 steps while the others sweep about 2200. Hold every joint near the
-middle of its travel, press `h`, then sweep and save. Centring opens the limits right up until you save a
+up as that joint sweeping nearly 4095 steps while the others sweep about 2200. Such a sweep is refused when
+you save it, and a range like that already in a servo is reported at start-up (see Troubleshooting), rather
+than aiming the joint at a middle it can't reach. Hold every joint near the middle of its travel, press
+`h`, then sweep and save. Centring opens the limits right up until you save a
 sweep, so if you power off in between, the arm reports no usable calibration and you simply redo it.
 
 The servos only keep new ranges through a power cycle if their EEPROM write-lock is clear, so saving
 clears it, writes, reads the values back, and locks again. Power-cycle once afterwards to confirm: the arm
 should still report `arm ready`.
 
-Type the key and press Enter. While recording, that arm's torque stays off and the leader stops sending
-poses, so the follower holds still instead of mirroring the sweep. Move **every** joint to both of its stops,
-then save. A sweep that missed a joint is refused rather than saved, and the arm re-checks itself afterwards,
-so the log tells you whether it took.
+Type the key and press Enter. **Support the follower before `H` or `R`**: both switch its torque off
+first, so it goes limp (the log says `torque off: support the arm`). While recording, that arm's torque
+stays off and the leader stops sending poses, so the follower holds still instead of mirroring the sweep.
+Move **every** joint to both of its stops, then save. A sweep that missed a joint, or crossed the seam, is
+refused rather than saved, and the recording carries on: sweep again and save, or cancel. After a save the
+arm re-checks itself, so the log tells you whether it took.
 
 ## 7. Putting the arms on Wi-Fi (for a PC to drive them)
 
@@ -161,6 +165,10 @@ after re-opening them.
 - **`outside its calibrated range`**: move that joint by hand toward the middle; it re-checks every second.
 - **`no usable calibration in servo N`**: that joint's recorded travel is too small to use. Re-record it
   with the keys in section 6, or recalibrate with lerobot.
+- **`... has no range yet (limits 0-4095)`**: the servo's limits are wide open, as centring leaves them.
+  Record a range with the keys in section 6, or recalibrate with lerobot.
+- **`... is nearly a full turn: it crosses the encoder seam`**: that joint's range was recorded across the
+  0/4095 seam, so its middle is somewhere it can't reach. Centre (`h`/`H`) and record it again (section 6).
 - **The IDE offers "Ozobot circuit kit" instead of the XIAO**: its board entry claims the same generic
   Espressif USB id, so auto-detect matches it first. Select **Tools > Board > esp32 > XIAO_ESP32C3** by
   hand and ignore the mismatch warning; the sketch refuses to build for the wrong chip anyway.

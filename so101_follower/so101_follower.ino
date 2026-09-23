@@ -297,6 +297,25 @@ void checkHealth(uint32_t now) {
   }
 }
 
+// Keeps the reported position true while nothing else is reading the servos. Waiting for the leader, torque
+// is off and the arm can be moved by hand; anything steering the arm starts from what's reported here, and a
+// stale report would have it glide the arm back to where it used to be.
+void refreshPositions(uint32_t now) {
+  if (now - last_health < kHealthPeriodMs) return;
+  last_health = now;
+  int32_t present[teleop::kNumJoints];
+  if (bus.readPositions(kIds, teleop::kNumJoints, present)) memcpy(present_pos, present, sizeof present_pos);
+}
+
+// Recording and re-centring both mean moving the arm by hand, so torque goes off first. After a fault the
+// servos can still be holding -- fail() deliberately doesn't let a loaded arm drop -- and re-homing a servo
+// that is holding a goal would drive it somewhere else entirely.
+bool torqueOff() {
+  bool ok = true;
+  for (int j = 0; j < teleop::kNumJoints; j++) ok = bus.write8(kIds[j], feetech::kTorqueEnable, 0) && ok;
+  return ok;
+}
+
 // Typing 'L' in the Serial Monitor runs this. Take the XIAO OFF its servo board, join D6 to D7 with a wire
 // and power it from USB: it proves whether this board's serial port and those two pins work at all. On the
 // servo board it would always fail, because that board mutes the receive line while transmitting.
@@ -325,9 +344,14 @@ void handleCommand(uint32_t now, uint8_t command) {
   switch (command) {
     case teleop::kCmdRecordRanges:
       if (state != State::kChecking && state != State::kWaitingForLeader) {
-        Serial.println("[follower] can't record while the arm is under torque");
+        Serial.println("[follower] can't record while the arm is being driven");
         return;
       }
+      if (!torqueOff()) {
+        Serial.println("[follower] can't record: not every servo would switch its torque off");
+        return;
+      }
+      Serial.println("[follower] torque off: support the arm");
       if (!bus.readPositions(kIds, teleop::kNumJoints, present, kCheckAttempts)) {
         fail(now, "could not read joint positions");
         return;
@@ -354,9 +378,14 @@ void handleCommand(uint32_t now, uint8_t command) {
     }
     case teleop::kCmdSetHome: {
       if (state != State::kChecking && state != State::kWaitingForLeader && state != State::kRecording) {
-        Serial.println("[follower] can't re-centre while the arm is under torque");
+        Serial.println("[follower] can't re-centre while the arm is being driven");
         return;
       }
+      if (!torqueOff()) {
+        Serial.println("[follower] can't re-centre: not every servo would switch its torque off");
+        return;
+      }
+      Serial.println("[follower] torque off: support the arm");
       char msg[112];
       if (teleop::setHome(bus, kIds, cal, msg, sizeof msg)) {
         Serial.printf("[follower] %s\n", msg);
@@ -490,6 +519,8 @@ void loop() {
           check_failed = true;
           fail(now, problem);
         }
+      } else {
+        refreshPositions(now);
       }
       break;
 
@@ -497,6 +528,8 @@ void loop() {
       if (fresh) {
         following_program = from_program;
         startGlide(now, packet);
+      } else {
+        checkHealth(now);  // torque is on: keep checking the servos answer, and report where the arm is
       }
       break;
 

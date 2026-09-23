@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from fake_follower import FakeFollower, K_MAX_RES, POSE_FORMAT, POSE_MAGIC
-from helpers import free_udp_port, wait_for
+from helpers import TEST_HOSTS, free_udp_port, wait_for
 from kinematics import Chain
 from mapping import JointMap, Mapping
 from program import Program, Runner, Step
@@ -236,7 +236,7 @@ def test_8_saving_never_silently_replaces_a_program(data_dir):
     from fastapi.testclient import TestClient
     from server import create_app
 
-    with TestClient(create_app(arm_port=free_udp_port())) as client:
+    with TestClient(create_app(arm_port=free_udp_port(), hosts=TEST_HOSTS)) as client:
         with client.websocket_connect("/ws") as socket:
             def reply(kind):
                 while True:
@@ -263,7 +263,7 @@ def test_12_stop_answers_at_once_even_behind_a_slow_request(data_dir, monkeypatc
     from server import create_app
 
     monkeypatch.setattr(Collector, "capture", lambda self, automatic=False: time.sleep(1.0) or "captured")
-    with TestClient(create_app(arm_port=free_udp_port())) as client:
+    with TestClient(create_app(arm_port=free_udp_port(), hosts=TEST_HOSTS)) as client:
         with client.websocket_connect("/ws") as socket:
             # A camera that doesn't exist, which the old code waited on, and a request that takes a second,
             # then STOP straight after.

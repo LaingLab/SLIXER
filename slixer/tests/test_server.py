@@ -9,14 +9,14 @@ import pytest
 import trimesh
 from fastapi.testclient import TestClient
 
-from helpers import free_udp_port, wait_for
+from helpers import TEST_HOSTS, free_udp_port, wait_for
 from fake_follower import FakeFollower
 from server import create_app
 
 
 @pytest.fixture
 def client(data_dir):
-    with TestClient(create_app(arm_port=free_udp_port())) as client:
+    with TestClient(create_app(arm_port=free_udp_port(), hosts=TEST_HOSTS)) as client:
         yield client
 
 
@@ -132,7 +132,7 @@ def test_programs_round_trip_through_the_link(client):
 def test_closing_the_page_while_driving_stops_driving(data_dir):
     pc_port, arm_port = free_udp_port(), free_udp_port()
     arm = FakeFollower(listen_port=arm_port, report_to=("127.0.0.1", pc_port)).start()
-    app = create_app(arm_port=pc_port)
+    app = create_app(arm_port=pc_port, hosts=TEST_HOSTS)
     try:
         with TestClient(app) as client:
             session = app.state.slixer.session
@@ -149,7 +149,7 @@ def test_closing_the_page_while_driving_stops_driving(data_dir):
 def test_the_camera_address_is_remembered(data_dir):
     import settings
 
-    with TestClient(create_app(arm_port=free_udp_port())) as client:
+    with TestClient(create_app(arm_port=free_udp_port(), hosts=TEST_HOSTS)) as client:
         with client.websocket_connect("/ws") as socket:
             socket.send_json({"do": "camera", "host": "10.9.8.7"})
             assert "remembered" in reply(socket)["text"]

@@ -13,7 +13,6 @@
 
 namespace teleop {
 
-constexpr int32_t kMinUsefulSpan = 200;  // ~18 deg: less than this is a joint that was not really moved
 constexpr uint32_t kEepromWriteMs = 30;  // a servo stops answering while it commits a register to EEPROM
 constexpr uint8_t kEepromAttempts = 8;
 
@@ -80,14 +79,15 @@ class RangeRecorder {
   int32_t span(int joint) const { return max_[joint] - min_[joint]; }
 
   // Writes the swept ranges to the servos. wrist_roll keeps the full circle, as lerobot gives it.
-  // Refuses if any other joint was not swept far enough, so a half-finished sweep can't be saved.
+  // Refuses if any other joint was not swept far enough, so a half-finished sweep can't be saved, or swept
+  // across the encoder's seam (see plausibleCalibration). A refusal leaves the recording going: sweep on, or
+  // cancel, then save again.
   //
   // The limits live in EEPROM, which a servo only writes while its Lock register is clear; otherwise the
   // new values apply until the power goes off and are then forgotten. lerobot clears that lock as part of
   // disabling torque, so servos it has driven are usually left locked. Each range is read back afterwards
   // to prove it stuck.
   bool save(feetech::Bus& bus, const uint8_t* ids, Range* cal, char* msg, size_t msg_len) {
-    active_ = false;
     for (int j = 0; j < kNumJoints; j++) {
       if (j == kWristRoll) continue;
       if (span(j) < kMinUsefulSpan) {
@@ -95,7 +95,12 @@ class RangeRecorder {
                  (long)span(j));
         return false;
       }
+      if (span(j) > kMaxUsefulSpan) {
+        snprintf(msg, msg_len, "%s swept %ld steps, nearly a full turn: it crosses the encoder seam. Cancel, centre (h/H), redo", jointName(j), (long)span(j));
+        return false;
+      }
     }
+    active_ = false;  // only now: a refusal above leaves the recording going
     for (int j = 0; j < kNumJoints; j++) {
       const int32_t lo = (j == kWristRoll) ? 0 : min_[j];
       const int32_t hi = (j == kWristRoll) ? kMaxRes : max_[j];

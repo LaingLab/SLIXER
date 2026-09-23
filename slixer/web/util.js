@@ -48,7 +48,7 @@ export function throttle(fn, ms) {
   let last = 0;
   let timer = null;
   let pending = null;
-  return (...args) => {
+  const throttled = (...args) => {
     const wait = ms - (performance.now() - last);
     if (wait <= 0) {
       clearTimeout(timer);
@@ -66,6 +66,14 @@ export function throttle(fn, ms) {
       }, wait);
     }
   };
+  // Drops the call still waiting to go, if there is one. STOP uses it: a move the throttle was holding
+  // back must not follow the STOP to the server and set the arm off again.
+  throttled.cancel = () => {
+    clearTimeout(timer);
+    timer = null;
+    pending = null;
+  };
+  return throttled;
 }
 
 // A control the user has just changed shouldn't be set back by the next update from the server, which can

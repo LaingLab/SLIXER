@@ -8,6 +8,36 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Versions are writ
 
 ## [Unreleased]
 
+### Fixed
+
+Found by a review of 0.1.0b1, each one a way the arm could move when it shouldn't, keep moving after
+STOP, or be driven by the wrong page. Every fix has a test in `slixer/tests/test_safety.py`.
+
+- **STOP** drops moves still on their way from the page, and holds the arm where it actually is, not where
+  it was last told to go. STOP, changing mode and stopping a program are carried out at once, even behind
+  a slow request.
+- **Esc during a drag** ends the drag: neither the handle nor a held slider sends anything more.
+- **A lost connection** is noticed within 3 seconds and said plainly. A STOP pressed while it's down is
+  sent the moment it's back.
+- **Closing the last page** lets go of the arm even if one of its tasks has failed, and one bad state
+  update no longer ends the updates.
+- **Importing a big STL** no longer holds up STOP: it's prepared in a process of its own.
+- **Programs wait for the real arm** in Drive: a move ends when the arm gets there, the program pauses
+  while the arm is out of touch, and it stops, holding the arm, if the arm gets no closer for 3 seconds.
+- **Drive** waits for a follower that's ready and calibrated, and ends, saying why, if the follower stops
+  taking poses.
+- **Switching from Drive to Plan** holds the real arm where it is, as Plan promises, instead of letting it
+  glide back to the leader. Watch lets go.
+- **Other websites can't drive the arm** through your browser: Slixer answers only its own page, at its
+  own names. `--allow-host` adds a name.
+- **A gripper map whose shut and open are less than 5° apart** is refused. It closed the gripper in Drive.
+- Firmware: the follower reports where the arm really is while it waits for the leader, and keeps checking
+  its servos while it holds the arm frozen.
+- Firmware: `H` and `R` switch the follower's torque off first, so support the arm. Re-centring a servo
+  that was still holding a pose would send it somewhere else.
+- Firmware: a sweep across the encoder's 0/4095 seam is refused rather than saved as a nearly full-circle
+  range, and a range like that already in a servo is reported at start-up. A refused save keeps recording.
+
 ## [0.1.0b1] - 2026-09-22
 
 The first public beta.

@@ -350,6 +350,16 @@ export class ArmScene {
       }
     });
 
+    // STOP ends a drag at once, even with the button still held: nothing more moves until it's let go and
+    // something is picked up again.
+    this.cancelDrag = () => {
+      if (!mode) return;
+      mode = null;
+      heldPart = null;
+      this.controls.enabled = true;
+      element.style.cursor = '';
+    };
+
     const release = (event) => {
       if (!mode) return;
       mode = null;

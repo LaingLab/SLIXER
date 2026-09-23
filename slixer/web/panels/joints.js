@@ -8,6 +8,7 @@ export class JointsPanel {
   constructor(app) {
     this.app = app;
     this.holding = new Set();   // sliders the user has hold of: the server must not yank them back
+    this.stopped = new Set();   // sliders held when STOP was pressed: they send nothing until let go
     this.send = throttle((arm) => app.send({ do: 'target_arm', arm }), 20);
     this.build();
   }
@@ -28,11 +29,15 @@ export class JointsPanel {
       slider.addEventListener('pointerdown', () => this.holding.add(name));
       const release = () => {
         this.holding.delete(name);
+        this.stopped.delete(name);
         slider.blur();  // give the keyboard back: R and Esc must work straight after touching a slider
       };
       slider.addEventListener('pointerup', release);
       slider.addEventListener('pointercancel', release);
-      slider.addEventListener('blur', () => this.holding.delete(name));
+      slider.addEventListener('blur', () => {
+        this.holding.delete(name);
+        this.stopped.delete(name);
+      });
       // A focused range input answers Home, End and the arrows by moving -- End sends the joint to its
       // limit. In Drive that's the real arm, so these sliders only ever move by hand.
       slider.addEventListener('keydown', (event) => {
@@ -42,7 +47,7 @@ export class JointsPanel {
       });
       slider.addEventListener('input', () => {
         const state = this.app.state;
-        if (!state?.movable) return;
+        if (!state?.movable || this.stopped.has(name)) return;
         const arm = [...state.commanded_arm];
         arm[index] = parseFloat(slider.value);
         $(`value-${name}`).textContent = this.format(index, arm[index]);
@@ -63,6 +68,12 @@ export class JointsPanel {
     });
   }
 
+  // STOP: drop the move the throttle is holding back, and ignore the sliders still held until they're let go.
+  cancel() {
+    this.send.cancel();
+    for (const name of this.holding) this.stopped.add(name);
+  }
+
   format(index, value) {
     return index < 5 ? `${value.toFixed(1)}°` : `${value.toFixed(0)}%`;
   }
@@ -71,7 +82,9 @@ export class JointsPanel {
     const movable = state.movable;
     $('joints-hint').textContent = {
       watch: 'Watching: these follow the real arm. Switch to Plan to pose the model, or Drive to move the arm.',
-      plan: 'Planning: these pose the virtual arm. Nothing is sent to the real one.',
+      plan: state.holding
+        ? 'Planning: these pose the virtual arm. The real arm is held where it was; Watch lets go of it.'
+        : 'Planning: these pose the virtual arm. Nothing is sent to the real one.',
       drive: 'Driving: these move the real arm, at up to 90° a second.',
     }[state.mode];
     $('zero-pose').disabled = !movable;

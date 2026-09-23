@@ -15,7 +15,7 @@ import { SetupPanel } from '/static/panels/setup.js';
 
 const HINTS = {
   watch: 'watching the real arm · switch to Plan to pose the model',
-  plan: 'drag the orange handle to pose the virtual arm · double-click a part to reach for it',
+  plan: 'drag the orange handle to pose the virtual arm · double-click a part to reach for it · the real arm stays where it is',
   drive: 'drag the orange handle to move the real arm · Esc stops',
 };
 
@@ -48,20 +48,52 @@ class App {
     this.wireViewport();
     this.wireKeys();
     this.connect();
+    // A connection that has quietly died -- a network dropped mid-way, say -- can take a long time to report
+    // itself closed. The server sends state twenty times a second, so three seconds of silence means it's
+    // gone: say so now, and start again.
+    setInterval(() => {
+      if (this.socket?.readyState === WebSocket.OPEN && performance.now() - this.lastHeard > 3000) this.lost(this.socket);
+    }, 500);
   }
 
   // ---- the link to the server -------------------------------------------------
 
   connect() {
     const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
-    this.socket = new WebSocket(url);
-    this.socket.onmessage = (event) => this.receive(JSON.parse(event.data));
-    this.socket.onopen = () => this.say('connected');
-    this.socket.onclose = () => {
-      this.say('lost the server — reconnecting');
-      this.showBanner('Slixer has lost its server. Nothing is being sent to the arm; reconnecting…', 'bad');
-      setTimeout(() => this.connect(), 1500);
+    const socket = new WebSocket(url);
+    this.socket = socket;
+    this.lastHeard = performance.now();
+    socket.onmessage = (event) => {
+      this.lastHeard = performance.now();
+      this.receive(JSON.parse(event.data));
     };
+    socket.onopen = () => {
+      this.lastHeard = performance.now();
+      if (this.pendingStop) {
+        // STOP was pressed while there was no connection: it goes before anything else.
+        socket.send(JSON.stringify({ do: 'stop' }));
+        this.pendingStop = false;
+        this.say('connected -- and sent the STOP pressed while the connection was down');
+      } else {
+        this.say('connected');
+      }
+    };
+    socket.onclose = () => this.lost(socket);
+  }
+
+  // The connection has gone, or stopped answering. Said plainly: this page can't reach the server, which
+  // may still be driving the arm -- for another page, or running a program -- so nothing can be promised
+  // about the arm from here.
+  lost(socket) {
+    if (socket !== this.socket) return;  // an old connection, already dealt with
+    this.socket = null;
+    socket.onclose = null;
+    socket.onmessage = null;
+    try { socket.close(); } catch { /* already gone */ }
+    this.say('lost the server — reconnecting');
+    this.showBanner('Lost the connection to Slixer, reconnecting. Until it is back this page can\u2019t send '
+      + 'anything, STOP included: if the arm must stop now, switch off its power.', 'bad');
+    setTimeout(() => this.connect(), 1500);
   }
 
   send(message) {
@@ -188,7 +220,19 @@ class App {
   }
 
   stop() {
-    this.send({ do: 'stop' });
+    // What the page itself still has on its way goes first -- the rest of a drag, a move the throttle is
+    // holding back, a slider still under the pointer -- or it would follow the STOP to the server and set
+    // the arm moving again straight after.
+    this.scene.cancelDrag();
+    this.scene.onDrag.cancel?.();
+    this.joints.cancel();
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify({ do: 'stop' }));
+      return;
+    }
+    this.pendingStop = true;  // sent the moment the connection is back
+    this.say('not connected: STOP will be sent as soon as the connection is back. '
+      + 'If the arm must stop now, switch off its power');
   }
 
   // ---- tabs, viewport, keys --------------------------------------------------

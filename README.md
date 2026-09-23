@@ -105,18 +105,24 @@ model up with your arm, a first program, and the camera.
 
 Slixer moves a robot. It's a beta, so go gently the first time it drives your arm.
 
-- **STOP** (or **Esc**, which works even while you're typing) ends a program and holds the arm where it is.
-  Switching to **Watch**, or closing every Slixer tab, lets go of it.
-- In **Drive**, moves are speed-limited and held to the range the arm was calibrated over.
+- **STOP** (or **Esc**, which works even while you're typing) ends a program, drops anything still on its
+  way, and holds the arm where it actually is. Switching to **Watch**, or closing every Slixer tab, lets go
+  of it; switching to **Plan** keeps holding it.
+- In **Drive**, moves are speed-limited and held to the range the arm was calibrated over. Drive waits for
+  a follower that says it's ready, and a program waits for the arm: it pauses while the arm is out of
+  touch, and stops, holding it, if the arm can't get where it's sent.
+- **If the page loses Slixer**, it says so, and until it reconnects it can't send anything, STOP included.
+  A STOP pressed meanwhile is sent the moment it's back; if the arm must stop sooner, switch off its power.
 - **Parts are drawn, not felt.** The arm doesn't know an imported part is there, and will drive through it.
-- **The page is served to this PC only**, unless you start it with `--host 0.0.0.0`. The arm's Wi-Fi link
-  has no password of its own: anything on the same network can send it poses. Keep the arm on a network you
+- **The page is served to this PC only**, unless you start it with `--host 0.0.0.0`, and only Slixer's own
+  page can drive the arm, not another website open in the same browser. The arm's Wi-Fi link has no
+  password of its own: anything on the same network can send it poses. Keep the arm on a network you
   trust. See [SECURITY.md](SECURITY.md).
 
 ## Development
 
 ```bash
-uv run pytest               # about 140 tests, two minutes, no hardware needed
+uv run pytest               # about 160 tests, two minutes, no hardware needed
 ```
 
 The tests run against an imitation follower that runs the firmware's own logic (`slixer/tests/fake_follower.py`)

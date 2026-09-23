@@ -7,6 +7,8 @@ import socket
 import time
 
 REAL_ARM_PORT = 50101
+# The Host a test client sends: Starlette's TestClient always says "testserver" for a WebSocket.
+TEST_HOSTS = ("localhost", "testserver")
 
 
 def free_udp_port() -> int:

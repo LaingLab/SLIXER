@@ -92,6 +92,10 @@ after you switch to Watch. If the arm stops following, a red banner says so, wit
 | red banner "the arm isn't following" | the leader is on and the follower has older firmware (flash it), or something is blocking the arm |
 | arm pill "only the leader is on Wi-Fi" | the follower isn't on Wi-Fi; Drive is refused, since it couldn't hear you |
 | Drive refused: "no arm to drive" | no follower reports reaching this PC |
+| Drive refused: "the arm isn't ready" | the follower is checking itself after a fault, or recording ranges: the message says which |
+| "stopped sending to the arm" | the follower stopped taking poses while you drove it; Drive again once it's ready |
+| a program stops: "the arm didn't get there" | something is in the arm's way, or the pose is out of its reach |
+| banner "Lost the connection to Slixer" | Slixer has stopped, or the PC is struggling; the page reconnects by itself |
 | camera pill "camera not answering" | `camera_stream.py` isn't running on the Pi, or the address is wrong (Camera tab) |
 | Camera tab: "Models need the vision extra" | run `uv sync --extra vision`, then restart Slixer |
 

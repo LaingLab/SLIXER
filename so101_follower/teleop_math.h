@@ -36,16 +36,29 @@ struct Range {
 inline float mid(const Range& r) { return (r.min + r.max) * 0.5f; }
 inline int32_t clampi(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
-// Rejects limits that can't come from lerobot-calibrate. On failure, writes the reason into `why`.
+constexpr int32_t kMinUsefulSpan = 200;   // ~18 deg: a range narrower than this was never really swept
+constexpr int32_t kMaxUsefulSpan = 3600;  // ~316 deg: wider, and the sweep crossed the encoder's 0/4095 seam
+
+// Rejects limits that can't describe a joint's travel. On failure, writes the reason into `why`.
+//
+// A range spanning nearly the whole circle comes from a sweep across the encoder's seam: its middle -- where
+// "0 degrees" is aimed -- is then in the part of the circle the joint can't reach, and the servo would push
+// it into a stop trying to get there.
 inline bool plausibleCalibration(const Range* r, char* why, size_t why_len) {
   for (int j = 0; j < kNumJoints; j++) {
-    if (r[j].min < 0 || r[j].max > kMaxRes || r[j].max - r[j].min < 200) {
+    if (r[j].min < 0 || r[j].max > kMaxRes || r[j].max - r[j].min < kMinUsefulSpan) {
       snprintf(why, why_len, "%s limits [%ld, %ld] are not a calibrated range", jointName(j), (long)r[j].min,
                (long)r[j].max);
       return false;
     }
-    if (j != kWristRoll && r[j].min == 0 && r[j].max == kMaxRes) {
-      snprintf(why, why_len, "%s has no calibration (limits 0-4095): run lerobot-calibrate", jointName(j));
+    if (j == kWristRoll) continue;  // it turns freely: its range may be the whole circle
+    if (r[j].min == 0 && r[j].max == kMaxRes) {
+      snprintf(why, why_len, "%s has no range yet (limits 0-4095): record one (r/R), or run lerobot-calibrate", jointName(j));
+      return false;
+    }
+    if (r[j].max - r[j].min > kMaxUsefulSpan) {
+      snprintf(why, why_len, "%s range [%ld,%ld] is nearly a full turn: it crosses the encoder seam. Centre it (h/H), re-record",
+               jointName(j), (long)r[j].min, (long)r[j].max);
       return false;
     }
   }

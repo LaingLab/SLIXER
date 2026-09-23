@@ -9,7 +9,8 @@ is the only thing in the project that sends it anything.
     uv run slixer/run.py --host 0.0.0.0           # reachable from the rest of the lab
 
 The default is deliberately localhost-only. This page can move a robot, and a robot that anyone on the
-network can move is a robot that will eventually be moved by someone who didn't mean to.
+network can move is a robot that will eventually be moved by someone who didn't mean to. For the same
+reason only this server's own page may use it: see SameOrigin.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import gzip
+import ipaddress
 import json
 import math
 import sys
@@ -24,6 +26,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -40,7 +43,7 @@ from mapping import GripperMap, JointMap, Mapping  # noqa: E402
 from program import Program  # noqa: E402
 import settings  # noqa: E402
 from scene import MESH_DIR, Scene  # noqa: E402
-from session import Session  # noqa: E402
+from session import Session, StaleRequest  # noqa: E402
 from version import VERSION  # noqa: E402
 from vision import Vision  # noqa: E402
 from dataset import Collector  # noqa: E402
@@ -51,6 +54,9 @@ MAX_UPLOAD = 64 * 1024 * 1024  # an STL bigger than this is a mistake, not a par
 
 WEB = HERE / "web"
 UPDATE_HZ = 20.0  # how often the browser is told where the arm is
+# Answered the moment they arrive, never queued behind something slower: STOP, and the two ways of letting
+# go of a program or the arm.
+URGENT = ("stop", "program.stop", "mode")
 FRESH = {"Cache-Control": "no-cache"}  # always check for a newer copy (cheap: unchanged files answer 304)
 
 
@@ -67,6 +73,66 @@ class Static(StaticFiles):
         if path.endswith((".js", ".css", ".html")) and not path.startswith("vendor/"):
             response.headers.update(FRESH)
         return response
+
+
+class SameOrigin:
+    """Lets a request in only if it's meant for this server, and a change only from this server's own page.
+
+    The page can drive a robot, and a browser will open a WebSocket to localhost for any web page that asks.
+    So:
+      * the Host header must name this machine -- an allowed name, or an IP address. That's what stops DNS
+        rebinding, where another site's name is pointed at 127.0.0.1 so that its pages count as this server;
+      * a WebSocket, or any request that changes something, must come from a page with this server's own
+        origin: not another site, not another app on localhost, not a file opened from disk ("null").
+    Programs that aren't browsers send no Origin, and are let through: they already run on a machine that
+    can reach the port.
+    """
+
+    def __init__(self, app, names):
+        self.app = app
+        self.names = {name.lower() for name in names}
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] not in ("http", "websocket"):
+            return await self.app(scope, receive, send)
+        headers = {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in scope["headers"]}
+        host = headers.get("host", "").strip().lower()
+        origin = headers.get("origin")
+        changes = scope["type"] == "websocket" or scope["method"] not in ("GET", "HEAD", "OPTIONS")
+        if not self.allowed(host):
+            return await _refuse(scope, receive, send,
+                                 f"this server doesn't answer to {host!r}: start it with --allow-host {_hostname(host)}")
+        if changes and origin is not None and urlsplit(origin).netloc.lower() != host:
+            return await _refuse(scope, receive, send, "only this server's own page can do that")
+        await self.app(scope, receive, send)
+
+    def allowed(self, host: str) -> bool:
+        name = _hostname(host)
+        if name in self.names:
+            return True
+        try:
+            ipaddress.ip_address(name)
+            return True
+        except ValueError:
+            return False
+
+
+def _hostname(host: str) -> str:
+    """The name in a Host header, without its port: "[::1]:8000" is "::1", "pc.local:8000" is "pc.local"."""
+    if host.startswith("["):
+        return host[1:host.find("]")] if "]" in host else host
+    return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+
+
+async def _refuse(scope, receive, send, why: str) -> None:
+    if scope["type"] == "websocket":
+        await receive()  # the connection request; closing instead of accepting it answers with a 403
+        await send({"type": "websocket.close", "code": 1008, "reason": why[:120]})
+        return
+    body = why.encode()
+    await send({"type": "http.response.start", "status": 403,
+                "headers": [(b"content-type", b"text/plain; charset=utf-8"), (b"content-length", str(len(body)).encode())]})
+    await send({"type": "http.response.body", "body": body})
 
 
 class Slixer:
@@ -115,7 +181,9 @@ class Slixer:
         }
 
 
-def create_app(camera_host: str | None = None, camera_port: int = 50102, arm_port: int = ARM_PORT) -> FastAPI:
+def create_app(camera_host: str | None = None, camera_port: int = 50102, arm_port: int = ARM_PORT,
+               hosts=("localhost",)) -> FastAPI:
+    """The server. `hosts` are the names this machine may be reached by, besides any IP address."""
     slixer = Slixer(camera_host, camera_port, arm_port)
     squashed: dict[str, bytes] = {}  # meshes, compressed once and kept
 
@@ -134,6 +202,7 @@ def create_app(camera_host: str | None = None, camera_port: int = 50102, arm_por
 
     app = FastAPI(title="Slixer", lifespan=lifespan)
     app.state.slixer = slixer
+    app.add_middleware(SameOrigin, names=hosts)
 
     # ---- the page -----------------------------------------------------------
 
@@ -173,7 +242,9 @@ def create_app(camera_host: str | None = None, camera_port: int = 50102, arm_por
         if len(data) > MAX_UPLOAD:
             raise HTTPException(status_code=413, detail="that file is over 64 MB")
         try:
-            item = slixer.scene.add(data, Path(file.filename).stem)
+            # Not here on the event loop, which answers STOP: importing a big part takes seconds. Scene.add
+            # also does the heavy part in a process of its own, so the control loop isn't starved either.
+            item = await asyncio.to_thread(slixer.scene.add, data, Path(file.filename).stem)
         except Exception as error:
             raise HTTPException(status_code=400, detail=f"couldn't read that STL: {error}") from error
         return JSONResponse({"item": item.to_json(), "items": slixer.scene.describe()["items"]})
@@ -251,25 +322,36 @@ def create_app(camera_host: str | None = None, camera_port: int = 50102, arm_por
         try:
             while True:
                 message = json.loads(await socket.receive_text())
-                if isinstance(message, dict) and message.get("do") == "stop":
-                    # Straight away, here, never queued behind anything slower: connecting a camera
-                    # or starting a model can take a second, and STOP must not wait that second.
-                    await socket.send_text(json.dumps(handle(slixer, message)))
+                if isinstance(message, dict) and message.get("do") in URGENT:
+                    # Straight away, here, never queued behind anything slower: connecting a camera or
+                    # stopping a model can take seconds, and STOP -- or Watch, which lets go -- must not wait.
+                    reply = _answer(slixer, message)
+                    if reply is not None:
+                        await socket.send_text(json.dumps(reply))
                 else:
+                    if isinstance(message, dict):
+                        # Stamped with the STOPs so far: a move carried out after another STOP, a let-go or
+                        # a change of mode -- queued behind something slow, say -- is dropped. See StaleRequest.
+                        message["_epoch"] = slixer.session.epoch
                     await queue.put(message)
         except (WebSocketDisconnect, json.JSONDecodeError, RuntimeError):
             pass
         finally:
-            for task in (pusher, worker):
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-            slixer.viewers -= 1
-            if slixer.viewers <= 0 and slixer.session.driving:
-                # Nobody is watching any more. Whoever was driving has closed the tab, lost their network,
-                # or put the laptop to sleep; none of those should leave a program running. The arm is let
-                # go: the firmware freezes it, or with the leader on, the leader glides it back to itself.
-                slixer.session.release()
+            try:
+                for task in (pusher, worker):
+                    task.cancel()
+                for outcome in await asyncio.gather(pusher, worker, return_exceptions=True):
+                    if isinstance(outcome, Exception):  # it died before the page went: said, but no reason to stop
+                        print("".join(traceback.format_exception(outcome)), file=sys.stderr)
+            finally:
+                # Always, whatever went wrong above: this is what lets go of the arm.
+                slixer.viewers -= 1
+                if slixer.viewers <= 0 and slixer.session.sending:
+                    # Nobody is watching any more. Whoever was driving has closed the tab, lost their
+                    # network, or put the laptop to sleep; none of those should leave a program running.
+                    # The arm is let go: the firmware freezes it, or with the leader on, the leader glides
+                    # it back to itself.
+                    slixer.session.release()
 
     return app
 
@@ -282,30 +364,50 @@ async def _work(socket: WebSocket, slixer: Slixer, queue: asyncio.Queue) -> None
     """
     while True:
         message = await queue.get()
-        try:
-            reply = await asyncio.to_thread(handle, slixer, message)
-        except (KeyError, ValueError) as error:
-            # The expected kind: a bad number, a name that doesn't exist. Said as a sentence.
-            reply = {"type": "note", "text": str(error.args[0]) if error.args else "that didn't work"}
-        except Exception as error:
-            # Anything at all. Losing this connection is what lets go of the arm, so a bug in one
-            # instruction must not take it down mid-move. It is reported to the page and printed here.
-            traceback.print_exc()
-            reply = {"type": "note", "text": f"something went wrong: {error!r}"}
+        reply = await asyncio.to_thread(_answer, slixer, message)
         if reply is not None:
             await socket.send_text(json.dumps(reply))
 
 
+def _answer(slixer: Slixer, message) -> dict | None:
+    """handle(), with anything it raises turned into something to say -- or, for a stale move, nothing."""
+    try:
+        return handle(slixer, message)
+    except StaleRequest:
+        return None  # asked for before a STOP that has already been answered: dropped without a word
+    except (KeyError, ValueError) as error:
+        # The expected kind: a bad number, a name that doesn't exist. Said as a sentence.
+        return {"type": "note", "text": str(error.args[0]) if error.args else "that didn't work"}
+    except Exception as error:
+        # Anything at all. Losing this connection is what lets go of the arm, so a bug in one instruction
+        # must not take it down mid-move. It is reported to the page and printed here.
+        traceback.print_exc()
+        return {"type": "note", "text": f"something went wrong: {error!r}"}
+
+
 async def _push(socket: WebSocket, slixer: Slixer) -> None:
-    """Sends the arm's state to the browser, forever."""
+    """Sends the arm's state to the browser, forever.
+
+    A snapshot that fails to build -- a folder of pictures changing while it's being counted -- is skipped,
+    not fatal: this is the page's only view of the arm, and it mustn't quietly freeze.
+    """
     period = 1.0 / UPDATE_HZ
+    complained = 0.0
     while True:
-        snapshot = slixer.session.snapshot()
-        snapshot["camera"] = slixer.camera_status()
-        snapshot["vision"] = slixer.vision.describe()
-        snapshot["dataset"] = slixer.datasets()
-        snapshot["type"] = "state"
-        await socket.send_text(json.dumps(snapshot))
+        try:
+            snapshot = slixer.session.snapshot()
+            snapshot["camera"] = slixer.camera_status()
+            snapshot["vision"] = slixer.vision.describe()
+            snapshot["dataset"] = slixer.datasets()
+            snapshot["type"] = "state"
+            text = json.dumps(snapshot)
+        except Exception:
+            if time.monotonic() - complained > 10.0:
+                complained = time.monotonic()
+                traceback.print_exc()
+            await asyncio.sleep(period)
+            continue
+        await socket.send_text(text)
         await asyncio.sleep(period)
 
 
@@ -320,28 +422,29 @@ def handle(slixer: Slixer, message: dict) -> dict | None:
     """One instruction from the browser. Returns a reply when there is something to say."""
     session = slixer.session
     what = message.get("do")
+    epoch = message.get("_epoch")  # set by live() for anything that was queued: see StaleRequest
 
     if what == "target":
-        pose, problem = session.set_target(message["pose"])
+        pose, problem = session.set_target(message["pose"], epoch)
         return {"type": "note", "text": problem} if problem else {"type": "accepted", "pose": pose}
 
     if what == "target_arm":
-        pose, problem = session.set_target_arm(message["arm"])
+        pose, problem = session.set_target_arm(message["arm"], epoch)
         return {"type": "note", "text": problem} if problem else {"type": "accepted", "pose": pose}
 
     if what == "ik":
-        pose, error, reached, problem = session.solve_to(message["xyz"])
+        pose, error, reached, problem = session.solve_to(message["xyz"], epoch=epoch)
         if problem:
             return {"type": "note", "text": problem}
         return {"type": "ik", "pose": pose, "error": error, "reached": reached}
 
     if what == "mode":
         problem = session.set_mode(str(message.get("mode", "")))
-        return {"type": "note", "text": problem or MODE_NOTES[session.mode]}
+        return {"type": "note", "text": problem or _mode_note(session)}
 
     if what == "drive":  # the older on/off form, still accepted
         problem = session.set_driving(bool(message.get("on")))
-        return {"type": "note", "text": problem or MODE_NOTES[session.mode]}
+        return {"type": "note", "text": problem or _mode_note(session)}
 
     if what == "stop":
         session.stop_everything()
@@ -351,7 +454,7 @@ def handle(slixer: Slixer, message: dict) -> dict | None:
 
     if what == "program.run":
         start = int(message.get("start", 0))
-        problem = session.run_program(Program.from_json(message["program"]), start_index=start)
+        problem = session.run_program(Program.from_json(message["program"]), start_index=start, epoch=epoch)
         return {"type": "note", "text": problem or ("rehearsing" if session.planning else "running")}
 
     if what == "program.stop":
@@ -475,6 +578,12 @@ MODE_NOTES = {
     "plan": "planning: the model is a virtual arm, and the real one is left alone",
     "drive": "driving: the model now moves the real arm",
 }
+
+
+def _mode_note(session: Session) -> str:
+    if session.mode == "plan" and session.holding is not None:
+        return "planning: the model is a virtual arm. The real arm is held where it is -- Watch lets go of it"
+    return MODE_NOTES[session.mode]
 
 
 app_files = WEB

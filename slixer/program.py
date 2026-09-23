@@ -187,9 +187,10 @@ class Program:
 class Runner:
     """Plays a program, one tick at a time.
 
-    Hand it the clock and where the arm actually is; it hands back where the arm should be. It never
-    assumes the arm arrived: each move is planned from the pose the arm was really in when the step
-    started, so a program that gets nudged part way through carries on from where it is.
+    Hand it the clock and the pose being commanded -- and, driving a real arm, where that arm actually is
+    -- and it hands back where the arm should be. It never assumes the arm arrived: each move is planned
+    from the pose the step started in, so a program that gets nudged part way through carries on from
+    where it is, and a move is over only once the command has got there and the real arm has too.
     """
 
     def __init__(self, program: Program, start_pose: list[float]):
@@ -204,6 +205,9 @@ class Runner:
         self._waiting_for = ""
         self._target: list[float] | None = None
         self._arrive_by = 0.0
+        self.stalled = False  # stopped because the real arm didn't reach a waypoint
+        self._closest = math.inf  # how near the real arm has come to this move's target, and when
+        self._closest_at = 0.0
 
     # Set by Session: the fastest the command may move, and the joint limits it will be held to. A move is
     # never planned faster than the one allows, and "arrived" is judged against a target the other has
@@ -213,6 +217,15 @@ class Runner:
     clamp = staticmethod(lambda pose: list(pose))
     ARRIVED = math.radians(0.5)
     GIVE_UP_AFTER = 3.0  # seconds past its time: a move that still hasn't arrived is let go, not waited on
+    # The real arm, when there is one, is judged more loosely: servos carrying a load settle a degree or two
+    # short of where they're sent. It has arrived within ARM_ARRIVED -- or within ARM_NEAR once it has
+    # stopped getting closer for ARM_SETTLE seconds. A real arm that gets no closer for GIVE_UP_AFTER seconds
+    # stops the program, rather than letting it carry on from the wrong place: something is in the way. One
+    # that is slow but still coming is waited for.
+    ARM_ARRIVED = math.radians(3.0)
+    ARM_NEAR = math.radians(8.0)
+    ARM_SETTLE = 0.5
+    ARM_PROGRESS = math.radians(0.3)  # closer by less than this isn't getting closer
 
     @property
     def step(self) -> Step | None:
@@ -232,6 +245,15 @@ class Runner:
             "message": self.message,
         }
 
+    def resume(self) -> None:
+        """After a pause (the arm out of touch), starts the current move again from where the command is.
+
+        Carrying on from the clock would restart the move at full speed from a standstill: a lurch.
+        """
+        step = self.step
+        if step is not None and step.kind in ("move", "gripper"):
+            self._started = None
+
     def _advance(self, now: float, here: list[float]) -> None:
         self.index += 1
         self._started = None
@@ -245,11 +267,13 @@ class Runner:
                 self.finished = True
                 self.message = "finished"
 
-    def tick(self, now: float, here: list[float], seen: set[str] | None = None) -> list[float] | None:
+    def tick(self, now: float, here: list[float], seen: set[str] | None = None,
+             actual: list[float] | None = None) -> list[float] | None:
         """Where the arm should be now, or None once the program is done.
 
-        `seen` is what the camera currently recognises, which is what a "wait_for" step watches. Passing
-        nothing means nothing is recognised, so such a step simply waits.
+        `here` is the pose being commanded. `seen` is what the camera currently recognises, which is what a
+        "wait_for" step watches; passing nothing means nothing is recognised, so such a step simply waits.
+        `actual` is where the real arm is, when one is being driven: a move isn't over until it gets there.
         """
         step = self.step
         if step is None:
@@ -258,6 +282,7 @@ class Runner:
         if self._started is None:
             self._started = now
             self._from = list(here)
+            self._closest, self._closest_at = math.inf, 0.0
             if step.kind in ("move", "gripper"):
                 if step.kind == "move":
                     target = list(step.pose)
@@ -287,8 +312,21 @@ class Runner:
             if elapsed >= self._duration:
                 # A move is over when the arm has got there, not when the clock says it should have.
                 arrived = max(abs(a - b) for a, b in zip(here, self._target)) <= self.ARRIVED
-                if arrived or elapsed >= self._arrive_by:
+                if actual is None:
+                    if arrived or elapsed >= self._arrive_by:
+                        self._advance(now, self._target)
+                    return pose
+                # The real arm too, not only the command sent to it. Its gripper is left out: one closed on
+                # something is meant to stop short.
+                off = max(abs(a - b) for a, b in zip(actual[:5], self._target[:5]))
+                if off < self._closest - self.ARM_PROGRESS:
+                    self._closest, self._closest_at = off, elapsed  # still getting closer
+                stuck_for = elapsed - self._closest_at
+                if arrived and (off <= self.ARM_ARRIVED or (off <= self.ARM_NEAR and stuck_for >= self.ARM_SETTLE)):
                     self._advance(now, self._target)
+                elif stuck_for >= self.GIVE_UP_AFTER:
+                    self.finished = self.stalled = True
+                    self.message = f"stopped at step {self.index + 1}: the arm didn't get there -- is something in the way?"
             return pose
 
         if step.kind == "wait":

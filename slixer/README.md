@@ -27,15 +27,23 @@ follows, press **record pose**. Nothing you do in Watch moves anything.
 
 **Plan** is where programs get written. The model comes loose from the arm: drag the orange handle,
 use the sliders, double-click a part, play a program — the real arm stays exactly where it is, drawn as a
-blue ghost so you can see it. Plans are still held to the arm's own calibrated joint limits.
+blue ghost so you can see it. Coming from Drive, Slixer goes on holding it there until you switch to Watch.
+Plans are still held to the arm's own calibrated joint limits.
 
 **Drive** moves the real arm. Switching in never makes it jump (it starts from where the arm is),
 commands walk at up to 90°/s rather than snapping, and everything is held to the range the arm was
-calibrated over. **STOP** or **Esc** — which works even while you're typing — ends the program and
-**holds the arm where it is**, still in Drive. Switching to **Watch** is how you let go of it: the arm
-then freezes, or, with the leader on, glides back to the leader. Closing every Slixer tab lets go too.
-Dragging the orange handle only ever bends the arm on from the pose it's in — it never refolds it — and
-lining the model up in Setup is refused while driving, since it would move the arm.
+calibrated over. **STOP** or **Esc** — which works even while you're typing — ends the program, drops
+any move still on its way, and **holds the arm where it actually is**, still in Drive. Switching to
+**Watch** is how you let go of it: the arm then freezes, or, with the leader on, glides back to the
+leader. Closing every Slixer tab lets go too. Dragging the orange handle only ever bends the arm on from
+the pose it's in — it never refolds it — and lining the model up in Setup is refused while driving, since
+it would move the arm.
+
+Drive waits for the follower to say it's ready: not while it's checking itself after a fault, recording
+its ranges, or without a calibration. If it stops taking poses while you drive, Slixer stops sending,
+goes back to Watch, and says why. If the page loses its connection to Slixer, a banner says so: until it's
+back, the page can't send anything, STOP included. A STOP pressed meanwhile is sent the moment it
+reconnects, but if the arm must stop sooner, switch off its power.
 
 ## Programs
 
@@ -44,6 +52,11 @@ something). New steps go in after the selected one. Select a move and it's drawn
 goes without going there. Double-click a move (or press **go there**) to send the model there in Plan,
 or the arm in Drive. **set to current pose** re-records a step. **▶ from here** plays from the selected
 step. Programs save to `slixer/programs/` as readable JSON.
+
+In Drive, a program waits for the real arm. A move is over when the arm has got there, not when the model
+has, so the next step starts from where the arm really is. If the arm drops out of touch the program
+pauses, and carries on smoothly once it's back; if the arm gets no closer for 3 seconds (something in its
+way, or a pose it can't reach), the program stops and holds the arm where it is.
 
 **Moves store the arm's own numbers** — five joint angles in degrees from the middle of each joint's
 calibrated travel, plus the gripper in percent: the same numbers the leader prints on its serial port.
@@ -98,14 +111,18 @@ Drive. Either way, if the arm stops following what Slixer tells it, a red banner
 ## On the network
 
 The default is localhost only: this page can move a robot. `--host 0.0.0.0` opens it to the lab, with no
-login. The arm's own link is plain UDP on port 50101 with no password: anything on the same network can
-send it poses, so keep it on a network you trust. Under WSL the arm's UDP only arrives with mirrored
-networking on.
+login. Either way, only Slixer's own page can drive the arm. A browser will connect to Slixer for any
+website that asks, so Slixer refuses a connection from any other site, and any request addressed to a
+name it doesn't answer to. IP addresses and this PC's own name work; `--allow-host NAME` adds another,
+such as a DNS alias.
+
+The arm's own link is plain UDP on port 50101 with no password: anything on the same network can send it
+poses, so keep it on a network you trust. Under WSL the arm's UDP only arrives with mirrored networking on.
 
 ## Tests
 
 ```bash
-uv run pytest     # ~140 tests, about two minutes, no hardware
+uv run pytest     # ~160 tests, about two minutes, no hardware
 ```
 
 They run against `tests/fake_follower.py`, which runs the follower firmware's own logic (both the old and

@@ -25,6 +25,7 @@ import paths
 
 CONFIG_PATH = paths.MAPPING
 BODY = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")
+MIN_GRIPPER_SPAN_DEG = 5.0  # shut and open closer than this can't tell one gripper opening from another
 
 
 @dataclass
@@ -50,6 +51,13 @@ class GripperMap:
 
     closed_deg: float = 0.0
     open_deg: float = 90.0
+
+    def __post_init__(self) -> None:
+        # With shut and open the same, every gripper angle would read as 0% -- and entering Drive would
+        # then send "shut" to a gripper that was open, whatever it's holding.
+        if abs(self.open_deg - self.closed_deg) < MIN_GRIPPER_SPAN_DEG:
+            raise ValueError(f"the gripper's open and shut angles must be at least {MIN_GRIPPER_SPAN_DEG:g} "
+                             "degrees apart")
 
     def to_model(self, percent: float) -> float:
         fraction = max(0.0, min(100.0, percent)) / 100.0
@@ -84,10 +92,13 @@ class Mapping:
             )
             for name in BODY
         }
-        gripper = GripperMap(
-            closed_deg=float(raw.get("gripper", {}).get("closed_deg", 0.0)),
-            open_deg=float(raw.get("gripper", {}).get("open_deg", 90.0)),
-        )
+        try:
+            gripper = GripperMap(
+                closed_deg=float(raw.get("gripper", {}).get("closed_deg", 0.0)),
+                open_deg=float(raw.get("gripper", {}).get("open_deg", 90.0)),
+            )
+        except ValueError:
+            gripper = GripperMap()  # an unusable one saved by an older Slixer: the default is at least safe
         return cls(joints=joints, gripper=gripper)
 
     def save(self, path: Path = CONFIG_PATH) -> None:

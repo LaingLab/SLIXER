@@ -44,6 +44,15 @@ def thumbnail(jpeg: bytes) -> np.ndarray | None:
     return None if image is None else cv2.resize(image, (40, 30), interpolation=cv2.INTER_AREA).astype(np.float32)
 
 
+def _not_empty(path: Path) -> bool:
+    """Whether a label file has anything in it. One that vanishes while the folder is being counted (they
+    get replaced wholesale with an annotation tool's export) simply isn't counted."""
+    try:
+        return path.stat().st_size > 0
+    except OSError:
+        return False
+
+
 class Collector:
     def __init__(self, camera, session, vision):
         self.camera = camera  # functions, as elsewhere: these can be swapped while running
@@ -148,7 +157,7 @@ class Collector:
         if paths.DATASETS.exists():
             for where in sorted(p for p in paths.DATASETS.iterdir() if p.is_dir()):
                 images = len(list((where / "images").glob("*.jpg"))) if (where / "images").exists() else 0
-                labelled = len([p for p in (where / "labels").glob("*.txt") if p.stat().st_size]) \
+                labelled = sum(_not_empty(p) for p in (where / "labels").glob("*.txt")) \
                     if (where / "labels").exists() else 0
                 datasets.append({"name": where.name, "images": images, "labelled": labelled})
         return {"name": self.name, "prelabel": self.prelabel, "auto_every": self.auto_every,

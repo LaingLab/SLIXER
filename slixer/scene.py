@@ -14,8 +14,11 @@ that turns up implausibly large is scaled down and the guess is reported rather 
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import math
+import multiprocessing
+import threading
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -52,11 +55,52 @@ class Item:
         return asdict(self)
 
 
+def prepare(data: bytes) -> tuple[bytes, float, int, int]:
+    """The slow part of importing: reads an STL, tidies the mesh, and centres it on its own origin.
+
+    Returns the tidied mesh as STL bytes, how big it is, and how many triangles it had before and after
+    thinning. Scene.add runs this in a process of its own.
+    """
+    mesh = trimesh.load_mesh(trimesh.util.wrap_as_stream(data), file_type="stl", process=False)
+    if not isinstance(mesh, trimesh.Trimesh) or len(mesh.faces) == 0:
+        raise ValueError("that file has no triangles in it -- is it really an STL?")
+
+    # Welding first, for the same reason the robot's own meshes need it: an STL is loose triangles,
+    # and thinning loose triangles shatters the model instead of simplifying it.
+    mesh.merge_vertices()
+    faces_before = len(mesh.faces)
+    if faces_before > TARGET_FACES:
+        try:
+            mesh = mesh.simplify_quadric_decimation(face_count=max(MIN_FACES, TARGET_FACES))
+        except Exception:
+            pass  # full detail still draws, just more slowly
+
+    # Sit the part on its own origin, so placing it is about where you want it rather than wherever
+    # the CAD package happened to put 0,0,0.
+    mesh.apply_translation(-mesh.bounding_box.centroid)
+    size = float(np.max(mesh.extents)) if mesh.extents is not None else 0.0
+    return mesh.export(file_type="stl"), size, faces_before, len(mesh.faces)
+
+
+def _in_own_process(function, *args):
+    """Runs `function` in a fresh process, and returns what it returns or raises what it raises.
+
+    Thinning a big mesh holds Python's interpreter lock for a second or more. Done in this process, that
+    would starve the 50 Hz loop that keeps the arm fed, and the firmware would freeze the arm mid-move. A
+    fresh process -- spawned, not forked from this one and all its threads -- takes a moment to start, and
+    parts are imported rarely.
+    """
+    context = multiprocessing.get_context("spawn")
+    with concurrent.futures.ProcessPoolExecutor(max_workers=1, mp_context=context) as pool:
+        return pool.submit(function, *args).result()
+
+
 class Scene:
     """Everything imported, and the file it is remembered in."""
 
     def __init__(self) -> None:
         self.items: list[Item] = []
+        self._lock = threading.RLock()  # parts are imported on one thread while another may be moving one
         self.load()
 
     # ---- the file ------------------------------------------------------------
@@ -95,33 +139,15 @@ class Scene:
 
     def add(self, data: bytes, name: str) -> Item:
         """Takes the bytes of an STL, tidies the mesh, and puts it in the scene in front of the arm."""
+        stl, size, faces_before, faces_after = _in_own_process(prepare, data)
+        scale, note = self._guess_units(size, faces_before, faces_after)
         MESH_DIR.mkdir(parents=True, exist_ok=True)
-        mesh = trimesh.load_mesh(trimesh.util.wrap_as_stream(data), file_type="stl", process=False)
-        if not isinstance(mesh, trimesh.Trimesh) or len(mesh.faces) == 0:
-            raise ValueError("that file has no triangles in it -- is it really an STL?")
-
-        # Welding first, for the same reason the robot's own meshes need it: an STL is loose triangles,
-        # and thinning loose triangles shatters the model instead of simplifying it.
-        mesh.merge_vertices()
-        faces_before = len(mesh.faces)
-        if faces_before > TARGET_FACES:
-            try:
-                mesh = mesh.simplify_quadric_decimation(face_count=max(MIN_FACES, TARGET_FACES))
-            except Exception:
-                pass  # full detail still draws, just more slowly
-
-        # Sit the part on its own origin, so placing it is about where you want it rather than wherever
-        # the CAD package happened to put 0,0,0.
-        mesh.apply_translation(-mesh.bounding_box.centroid)
-
-        size = float(np.max(mesh.extents)) if mesh.extents is not None else 0.0
-        scale, note = self._guess_units(size, faces_before, len(mesh.faces))
-
-        item = Item(id=uuid.uuid4().hex[:12], name=name[:64] or "part", scale=scale, note=note,
-                    colour=COLOURS[len(self.items) % len(COLOURS)])
-        mesh.export(MESH_DIR / f"{item.id}.stl")
-        self.items.append(item)
-        self.save()
+        with self._lock:
+            item = Item(id=uuid.uuid4().hex[:12], name=name[:64] or "part", scale=scale, note=note,
+                        colour=COLOURS[len(self.items) % len(COLOURS)])
+            (MESH_DIR / f"{item.id}.stl").write_bytes(stl)
+            self.items.append(item)
+            self.save()
         return item
 
     @staticmethod
@@ -141,23 +167,24 @@ class Scene:
         return next((i for i in self.items if i.id == item_id), None)
 
     def update(self, item_id: str, changes: dict) -> Item:
-        item = self.find(item_id)
-        if item is None:
-            raise KeyError(f"no object {item_id!r} in the scene")
-        if "name" in changes:
-            item.name = str(changes["name"])[:64]
-        if "position" in changes:
-            item.position = self._three(changes["position"], "a position")
-        if "rotation" in changes:
-            item.rotation = self._three(changes["rotation"], "a rotation")
-        if "scale" in changes:
-            item.scale = max(1e-4, min(1000.0, self._real(changes["scale"])))
-        if "colour" in changes:
-            item.colour = str(changes["colour"])[:16]
-        if "visible" in changes:
-            item.visible = bool(changes["visible"])
-        self.save()
-        return item
+        with self._lock:
+            item = self.find(item_id)
+            if item is None:
+                raise KeyError(f"no object {item_id!r} in the scene")
+            if "name" in changes:
+                item.name = str(changes["name"])[:64]
+            if "position" in changes:
+                item.position = self._three(changes["position"], "a position")
+            if "rotation" in changes:
+                item.rotation = self._three(changes["rotation"], "a rotation")
+            if "scale" in changes:
+                item.scale = max(1e-4, min(1000.0, self._real(changes["scale"])))
+            if "colour" in changes:
+                item.colour = str(changes["colour"])[:16]
+            if "visible" in changes:
+                item.visible = bool(changes["visible"])
+            self.save()
+            return item
 
     @classmethod
     def _three(cls, values, what: str) -> list[float]:
@@ -173,12 +200,14 @@ class Scene:
         return number
 
     def remove(self, item_id: str) -> None:
-        item = self.find(item_id)
-        if item is None:
-            return
-        self.items = [i for i in self.items if i.id != item_id]
-        (MESH_DIR / f"{item.id}.stl").unlink(missing_ok=True)
-        self.save()
+        with self._lock:
+            item = self.find(item_id)
+            if item is None:
+                return
+            self.items = [i for i in self.items if i.id != item_id]
+            (MESH_DIR / f"{item.id}.stl").unlink(missing_ok=True)
+            self.save()
 
     def describe(self) -> dict:
-        return {"items": [i.to_json() for i in self.items]}
+        with self._lock:
+            return {"items": [i.to_json() for i in self.items]}

@@ -37,8 +37,10 @@ STATUS_FORMAT = "<BBBBB6h6h6h"
 POSE_MAGIC, STATUS_MAGIC = 0xA5, 0x5B
 PROGRAM_MAGIC = 0xA7  # protocol 2: a pose from a program, which takes the arm from the leader
 
-WAITING, GLIDING, FOLLOWING, FROZEN = 1, 2, 3, 4  # the state codes the status packet carries
-STATE_NAMES = {WAITING: "waiting for leader", GLIDING: "gliding", FOLLOWING: "following", FROZEN: "holding"}
+CHECKING, WAITING, GLIDING, FOLLOWING, FROZEN = 0, 1, 2, 3, 4  # the state codes the status packet carries
+STATE_NAMES = {CHECKING: "checking arm", WAITING: "waiting for leader", GLIDING: "gliding", FOLLOWING: "following",
+               FROZEN: "holding"}
+FAULT_NO_REPLY = 1
 
 # Believable STS3215s at 12 V: about 300 degrees a second flat out, and quick to get there.
 SERVO_DEG_PER_SEC = 300.0
@@ -98,6 +100,8 @@ class FakeFollower:
         self._threads: list[threading.Thread] = []
 
         self.state = WAITING
+        self.fault = 0
+        self.zeroed = False  # reporting the all-zero positions and ranges of a follower not yet checked
         self.positions = [mid(r) for r in self.ranges]  # arm resting mid-range
         self.velocities = [0.0] * 6
         self.goals = list(self.positions)
@@ -258,8 +262,13 @@ class FakeFollower:
                 self.positions[j] += step
 
     def _send_status(self) -> None:
-        fields = (STATUS_MAGIC, self.state, 0, 0, min(255, self.poses_since_report),
-                  *[int(round(p)) for p in self.positions], *[r[0] for r in self.ranges], *[r[1] for r in self.ranges])
+        if self.zeroed:
+            positions, lows, highs = [0] * 6, [0] * 6, [0] * 6
+        else:
+            positions = [int(round(p)) for p in self.positions]
+            lows, highs = [r[0] for r in self.ranges], [r[1] for r in self.ranges]
+        fields = (STATUS_MAGIC, self.state, self.fault, 0, min(255, self.poses_since_report),
+                  *positions, *lows, *highs)
         # Protocol 2 adds its version at the end; an old follower's status stops short of it.
         packet = struct.pack(STATUS_FORMAT + "B", *fields, 2) if self.priority else struct.pack(STATUS_FORMAT, *fields)
         try:
@@ -268,6 +277,18 @@ class FakeFollower:
             pass
 
     # ---- for tests ---------------------------------------------------------------------------------
+
+    def fail(self, fault: int = FAULT_NO_REPLY, zeroed: bool = False) -> None:
+        """The firmware's fail(): back to checking itself -- its servos stopped answering, say. Torque stays as
+        it was, and poses keep being stored, though not acted on. With `zeroed`, its reports carry the
+        all-zero positions and ranges of a follower that hasn't passed its checks since it started."""
+        with self._lock:
+            self.state, self.fault, self.zeroed = CHECKING, fault, zeroed
+
+    def recover(self) -> None:
+        """The checks pass again: waiting for poses, and the first fresh one is glided to."""
+        with self._lock:
+            self.state, self.fault, self.zeroed = WAITING, 0, False
 
     def degrees(self) -> list[float]:
         """Joint angles as the arm itself would report them: degrees from the middle of each range."""

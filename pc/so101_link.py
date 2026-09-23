@@ -75,6 +75,12 @@ class ArmState:
     def ready(self) -> bool:
         return self.state in ("following", "holding", "waiting for leader", "gliding")
 
+    @property
+    def calibrated(self) -> bool:
+        """Whether the ranges are real ones. Until a follower has passed its own checks since starting, it
+        reports every range, and every position, as zero."""
+        return all(hi > lo for lo, hi in zip(self.range_min, self.range_max))
+
 
 class Arm:
     """The follower arm, as seen from a PC."""

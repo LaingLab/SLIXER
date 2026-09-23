@@ -6,6 +6,13 @@
 
 import { $, degrees, JOINT_LABELS, settled, touch } from '/static/util.js';
 
+// What's in a number box, or `fallback` if it isn't a number. Not `parseFloat(text) || fallback`: that
+// turns a typed 0 into the fallback, and 0 is a perfectly good angle.
+const numberOr = (text, fallback) => {
+  const value = parseFloat(text);
+  return Number.isFinite(value) ? value : fallback;
+};
+
 export class SetupPanel {
   constructor(app) {
     this.app = app;
@@ -45,14 +52,14 @@ export class SetupPanel {
     for (const name of this.app.model.motors.slice(0, 5)) {
       joints[name] = {
         sign: $(`flip-${name}`).classList.contains('flipped') ? -1 : 1,
-        offset_deg: parseFloat($(`offset-${name}`).value) || 0,
+        offset_deg: numberOr($(`offset-${name}`).value, 0),
       };
     }
     return {
       joints,
       gripper: {
-        closed_deg: parseFloat($('grip-closed').value) || 0,
-        open_deg: parseFloat($('grip-open').value) || 90,
+        closed_deg: numberOr($('grip-closed').value, 0),
+        open_deg: numberOr($('grip-open').value, 90),
       },
     };
   }

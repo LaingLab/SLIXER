@@ -21,12 +21,19 @@ Slixer is in beta. Fixes go into the latest release only.
 - **The page has no login.** Anyone who can reach it can drive the arm and upload files. That's why it
   serves this PC only (`127.0.0.1`) unless it's started with `--host 0.0.0.0`. Only do that on a network
   you trust.
+- **Only Slixer's own page can drive it.** A browser will open a connection to `localhost` for any website
+  that asks, so Slixer refuses a WebSocket, or anything but a plain read, from a page of another origin,
+  and any request whose Host is neither an IP address nor one of this PC's names (which is what DNS
+  rebinding needs). With `--host 0.0.0.0`, this PC's own name works too, and `--allow-host NAME` adds
+  another. Programs that aren't browsers send no Origin and are let through: they already run somewhere
+  that can reach the arm's link directly.
 - **The arm's Wi-Fi link has no password of its own.** The boards take poses as plain UDP on port 50101
   from anything on the same network. The Wi-Fi password is the only protection, so keep the arms on a
   network where everyone who can join may also move them.
 - **Wi-Fi passwords** go in each sketch's `wifi_config.h`, which git ignores. Don't commit one, and check
   before sharing a copy of the firmware folder.
-- **Imported STL files** are parsed on the PC with trimesh. Only import files you trust.
+- **Imported STL files** are parsed on the PC with trimesh, in a process of their own. Only import files
+  you trust.
 
 ## Out of scope
 
