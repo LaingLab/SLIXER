@@ -30,7 +30,9 @@ other's files, so `pyproject.toml` leaves the full one out. Ultralytics works th
 To upgrade Ultralytics: `uv lock --upgrade-package ultralytics && uv sync --extra vision`. To run the
 models in some other environment, point `SLIXER_VISION_PYTHON` at its Python.
 
-Models live in `slixer/models/`; stock ones download there the first time they're picked.
+Models live in `slixer/models/`; stock ones download there the first time they're picked. A model of your own
+goes there too: copy in its `.pt` and reload the page. Each model runs at the picture size it was trained at,
+so one trained at 1280 runs at 1280.
 
 ## Three kinds of model
 
@@ -42,6 +44,12 @@ Models live in `slixer/models/`; stock ones download there the first time they'r
 
 `-seg` models outline what they find; the others only box it. The `yoloe-…-pf` model has a large built-in
 vocabulary instead of being told what to look for.
+
+A **semantic** model (one trained from `yolo26n-sem`, on the Ultralytics Platform say) marks areas rather than
+things: it gives every pixel of the picture a class. Slixer outlines each patch of a class as a find, with its
+box and its middle, so it's drawn and waited for like any other. A class map carries no confidence, so
+**sure enough at** doesn't change what it marks; patches smaller than a speck are left out. Classification,
+rotated-box (OBB) and depth models find nothing in the picture to outline, and are refused when picked.
 
 **Start with YOLOE.** It finds things by name with no training at all: pick `yoloe-26s-seg.pt`, type what
 to look for in the box, tick **run**. Whether it finds a 6-well plate well enough depends on the plate and
@@ -113,4 +121,6 @@ natural next step once detection is reliable.
 | *Loading … (the first time, it downloads)* | fetching the weights: a few seconds to a minute |
 | *… finds things by name: type what to look for* | YOLOE needs words in the **look for** box |
 | *Stopped: …* | the model process died; the reason follows, and `vision-worker.log` has the rest |
+| *Stopped: it failed on 20 pictures in a row: …* | it loaded, but Slixer can't read what it returns; the reason follows, and `vision-worker.log` has the rest |
+| *Stopped: … is a classification model* | it names a whole picture rather than finding things in it: train a detection or segmentation model |
 | it runs but finds nothing | lower **sure enough at**; check the words (YOLOE) or the model |

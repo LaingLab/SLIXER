@@ -35,6 +35,7 @@ STOCK_MODELS = (  # downloaded on first use; the -seg ones outline what they fin
 )
 DEFAULT_MODEL = "yolo26s-seg.pt"  # on an RTX 4090, 14 ms a frame; the n and m sizes are within 3 ms of it
 STALE_SECONDS = 1.0  # answers about a picture older than this are dropped: the scene has moved on
+GIVE_UP_AFTER = 20  # pictures in a row a model fails on before it's stopped, saying why, rather than left to fail
 WORKER = Path(__file__).resolve().parent / "yolo_worker.py"
 
 
@@ -110,7 +111,7 @@ class ModelRunner:
         self._stop.clear()
         self.state, self.problem, self.info = "starting", "", {}
         self._frame_times.clear()  # else the gap since the last model ran reads as a slow rate
-        self.rate = 0.0
+        self.rate = self.ms = 0.0
         self._thread = threading.Thread(target=self._run, daemon=True, name="model")
         self._thread.start()
         return ""
@@ -211,6 +212,7 @@ class ModelRunner:
 
     def _feed(self, process) -> None:
         last_seen = -1
+        failed_in_a_row = 0
         while not self._stop.is_set():
             camera = self.camera()
             if camera is None:
@@ -236,7 +238,11 @@ class ModelRunner:
             answer = json.loads(payload)
             if kind == b"E":
                 self.problem = answer.get("error", "")
+                failed_in_a_row += 1
+                if failed_in_a_row >= GIVE_UP_AFTER:  # not a bad picture: this model can't be run like this
+                    return self._fail(f"it failed on {failed_in_a_row} pictures in a row: {self.problem}")
                 continue
+            failed_in_a_row = 0
             with self._lock:
                 self.detections = answer["detections"]
                 self.answered_at = captured  # how old the answer is, measured from the picture it's about

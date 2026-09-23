@@ -251,3 +251,76 @@ def test_an_open_vocabulary_model_finds_what_it_is_told_to_and_can_be_retold():
         wait_for(lambda: {h["label"] for h in runner.current()} == {"bus"}, 10, "never re-told")
     finally:
         runner.stop()
+
+
+# ---- semantic models, and models that fail ---------------------------------------------------------------
+
+def test_the_patches_a_semantic_model_marks_become_outlined_finds():
+    import cv2
+    import numpy as np
+
+    from regions import patches
+
+    marked = np.zeros((720, 1280), np.uint8)  # a model of one class marks it 1 on a background of 0
+    cv2.circle(marked, (300, 200), 60, 1, -1)
+    cv2.rectangle(marked, (800, 400), (900, 470), 1, -1)
+    marked[700:703, 10:13] = 1  # a speck, not a thing
+    found = patches(marked, {0: "Class 0"})
+    assert [hit["label"] for hit in found] == ["Class 0", "Class 0"]
+    circle, square = found  # the biggest first
+    assert circle["score"] is None and circle["cls"] == 0  # a class map has no confidence to give
+    assert circle["centre"] == pytest.approx([300 / 1280, 200 / 720], abs=0.002)
+    assert square["box"] == pytest.approx([800 / 1280, 400 / 720, 901 / 1280, 471 / 720], abs=0.002)
+    assert all(0 <= v <= 1 for hit in found for point in hit["polygon"] for v in point)
+    assert 4 <= len(square["polygon"]) <= 80 and len(circle["polygon"]) <= 80
+
+
+def test_background_and_pixels_outside_the_classes_asked_for_are_not_finds():
+    import numpy as np
+
+    from regions import patches
+
+    marked = np.zeros((480, 640), np.uint8)  # a model of several classes, the first of them the background
+    marked[50:150, 50:200] = 1
+    marked[300:400, 400:500] = 2
+    marked[0:40, 500:640] = 255  # Ultralytics' mark for a class that wasn't asked for
+    found = patches(marked, {0: "background", 1: "plate", 2: "tip"})
+    assert sorted((hit["label"], hit["cls"]) for hit in found) == [("plate", 1), ("tip", 2)]
+
+
+class Runnable(ModelRunner):
+    installed = True  # the stand-in worker needs no vision extra
+
+
+def stand_in(monkeypatch, fails: str) -> tuple[Camera, ModelRunner]:
+    """A ModelRunner whose worker is tests/fake_worker.py, failing on `fails` pictures."""
+    import sys
+
+    import detection
+
+    monkeypatch.setattr(detection, "WORKER", Path(__file__).resolve().parent / "fake_worker.py")
+    monkeypatch.setenv("FAKE_WORKER_FAILS", fails)
+    camera = Camera(b"a picture")
+    return camera, Runnable(lambda: camera, python=Path(sys.executable))
+
+
+def test_a_model_that_fails_on_every_picture_stops_and_says_why(data_dir, monkeypatch):
+    camera, runner = stand_in(monkeypatch, "every")
+    try:
+        assert runner.start(MODEL) == ""
+        wait_for(lambda: runner.state == "failed", 10, "a model failing on every picture was left running")
+        assert "in a row" in runner.problem and "NoneType" in runner.problem  # why: not "loading" for ever
+        assert runner.current() == []
+    finally:
+        runner.stop()
+
+
+def test_a_bad_picture_now_and_then_does_not_stop_a_model(data_dir, monkeypatch):
+    camera, runner = stand_in(monkeypatch, "sometimes")
+    try:
+        assert runner.start(MODEL) == ""
+        wait_for(lambda: camera.frames_received > 90 or runner.state == "failed", 10, "the model stopped answering")
+        assert runner.state == "running", runner.problem  # a third of them failed, but never twenty in a row
+        assert [hit["label"] for hit in runner.current()] == ["thing"]
+    finally:
+        runner.stop()

@@ -8,7 +8,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Versions are writ
 
 ## [Unreleased]
 
+### Added
+
+- **Semantic segmentation models**, such as one trained from `yolo26n-sem` on the Ultralytics Platform. Each
+  patch of a class the model marks is outlined as a find, and can be waited for like any other.
+
+### Changed
+
+- Each model runs at the picture size it was trained at, rather than always at 640.
+
 ### Fixed
+
+- **A model Slixer can't read the results of** no longer looks as if it's running, or still loading: after
+  20 pictures in a row that fail it stops, saying why. A classification, rotated-box or depth model is
+  refused when it loads, and a repeated error goes in the worker's log once, not for every picture.
+- "Loading … (the first time, it downloads)" only mentions downloading for a stock model not yet downloaded.
 
 Found by a review of 0.1.0b1, each one a way the arm could move when it shouldn't, keep moving after
 STOP, or be driven by the wrong page. Every fix has a test in `slixer/tests/test_safety.py`.

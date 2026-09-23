@@ -105,7 +105,7 @@ export class CameraPanel {
       const frame = hit.polygon ? 'found outlined' : 'found';
       return `<div class="${frame}" style="left:${x0 * 100}%;top:${y0 * 100}%;width:${(x1 - x0) * 100}%;`
         + `height:${(y1 - y0) * 100}%;border-color:${c}"><span style="background:${c}">`
-        + `${escape(hit.label)} ${Math.round(hit.score * 100)}%</span></div>`;
+        + `${escape(hit.label)}${hit.score == null ? '' : ` ${Math.round(hit.score * 100)}%`}</span></div>`;  // a semantic model's patches have no score
     });
     holder.innerHTML = (outlines.length ? `<svg class="outlines" viewBox="0 0 1 1" preserveAspectRatio="none">${outlines.join('')}</svg>` : '')
       + labels.join('');
@@ -137,17 +137,20 @@ export class CameraPanel {
     } else if (model.state === 'failed') {
       note = `Stopped: ${model.problem}`;
     } else if (model.state === 'starting') {
-      note = `Loading ${model.model}\u2026 (the first time, it downloads)`;
+      const fetching = this.models?.get(model.model);  // only a stock model not yet here has anything to download
+      note = `Loading ${model.model}\u2026${fetching?.stock && !fetching.downloaded ? ' (the first time, it downloads)' : ''}`;
     } else if (model.state === 'running') {
       note = `${model.model} on the ${model.device}: ${Math.round(model.ms)} ms a picture, `
         + `${Math.round(model.rate)} a second \u00b7 knows ${model.names.length} kind${model.names.length === 1 ? '' : 's'} of thing`
-        + (vision.found?.length ? ` \u00b7 sees ${[...new Set(vision.found.map((f) => f.label))].join(', ')}` : '');
+        + (vision.found?.length ? ` \u00b7 sees ${[...new Set(vision.found.map((f) => f.label))].join(', ')}` : '')
+        + (model.task === 'semantic' ? ' \u00b7 outlines areas (a semantic model: sure enough at doesn\u2019t apply)' : '')
+        + (model.problem ? ` \u00b7 the last picture failed: ${model.problem}` : '');
     } else {
       note = 'A YOLO model, running on this PC\u2019s GPU in a process of its own. What it finds is outlined on '
         + 'the picture and counts for wait-for steps.';
     }
     $('model-note').textContent = note;
-    $('model-note').classList.toggle('bad', model.state === 'failed');
+    $('model-note').classList.toggle('bad', model.state === 'failed' || (model.state === 'running' && !!model.problem));
   }
 
   showDataset(dataset) {

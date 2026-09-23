@@ -37,7 +37,11 @@ _requests = os.fdopen(os.dup(0), "rb", buffering=0)
 os.environ.setdefault("YOLO_VERBOSE", "False")
 os.environ.setdefault("YOLO_OFFLINE", "True")  # no telemetry; weights still download on first use
 
-MAX_POINTS = 80  # an outline this detailed is plenty to draw, and keeps each message small
+from regions import patches, thin  # noqa: E402  (after the redirect, like everything that might print)
+
+# What Slixer can show: things found in the picture, boxed or outlined, or the areas a semantic model marks.
+SHOWN = ("detect", "segment", "pose", "semantic")
+KINDS = {"classify": "classification", "obb": "rotated-box (OBB)", "depth": "depth"}
 
 
 def send(kind: bytes, payload: bytes) -> None:
@@ -65,14 +69,6 @@ def receive() -> tuple[bytes, bytes]:
     return body[:1], body[1:]
 
 
-def thin(points, limit: int = MAX_POINTS) -> list:
-    if len(points) <= limit:
-        return [[round(float(x), 4), round(float(y), 4)] for x, y in points]
-    step = len(points) / limit
-    return [[round(float(points[int(i * step)][0]), 4), round(float(points[int(i * step)][1]), 4)]
-            for i in range(limit)]
-
-
 def open_vocabulary(path: str) -> bool:
     """YOLOE models find whatever they're told to by name; the -pf ones have a vocabulary of their own."""
     name = os.path.basename(path)
@@ -87,19 +83,25 @@ class Model:
         self.path = config["model"]
         self.conf = float(config.get("conf", 0.25))
         self.iou = float(config.get("iou", 0.5))
-        self.imgsz = int(config.get("imgsz", 640))
         self.device = 0 if torch.cuda.is_available() else "cpu"
         self.half = self.device == 0  # half precision on the GPU: twice as fast, same answers
         self.open = open_vocabulary(self.path)
         self.model = YOLOE(self.path) if self.open else YOLO(self.path)
         self.task = self.model.task
+        if self.task not in SHOWN:
+            raise ValueError(f"{os.path.basename(self.path)} is a {KINDS.get(self.task, self.task)} model, which "
+                             "Slixer can't show: it runs detection and segmentation models")
+        # The size of picture it learned from, unless told otherwise: a model trained on 1280-pixel pictures
+        # finds things at that scale, and at 640 misses them or marks others.
+        self.imgsz = config.get("imgsz") or self.model.overrides.get("imgsz") or 640
         self.words: list[str] = []
         self.retune(config)
 
         started = time.perf_counter()
         import numpy as np
 
-        self.model.predict(np.zeros((self.imgsz, self.imgsz, 3), np.uint8), device=self.device, half=self.half,
+        side = max(self.imgsz) if isinstance(self.imgsz, (list, tuple)) else int(self.imgsz)
+        self.model.predict(np.zeros((side, side, 3), np.uint8), imgsz=self.imgsz, device=self.device, half=self.half,
                            verbose=False)  # the first run pays for CUDA start-up; better now than on a frame
         self.warmup_ms = (time.perf_counter() - started) * 1000
         self.device_name = torch.cuda.get_device_name(0) if self.device == 0 else "CPU"
@@ -124,6 +126,9 @@ class Model:
     def run(self, frame) -> list[dict]:
         result = self.model.predict(frame, conf=self.conf, iou=self.iou, imgsz=self.imgsz, device=self.device,
                                     half=self.half, classes=self.classes, verbose=False)[0]
+        if self.task == "semantic":  # a class for every pixel rather than a list of things: each patch is a find
+            marked = result.semantic_mask
+            return patches(marked.data.cpu().numpy(), self.names) if marked is not None else []
         height, width = result.orig_shape
         detections = []
         boxes = result.boxes
@@ -149,6 +154,7 @@ def main() -> None:
     import numpy as np
 
     model = None
+    last_error = ""
     while True:
         try:
             kind, payload = receive()
@@ -165,7 +171,7 @@ def main() -> None:
                     model = None
                     model = Model(config)
                 send_json(b"R", {"model": os.path.basename(model.path), "task": model.task,
-                                 "names": model.names, "device": model.device_name,
+                                 "names": model.names, "device": model.device_name, "imgsz": model.imgsz,
                                  "warmup_ms": round(model.warmup_ms), "open": model.open})
             elif kind == b"F":
                 number = struct.unpack(">Q", payload[:8])[0]
@@ -180,9 +186,13 @@ def main() -> None:
                 detections = model.run(frame)
                 send_json(b"D", {"frame": number, "ms": round((time.perf_counter() - started) * 1000, 1),
                                  "size": [frame.shape[1], frame.shape[0]], "detections": detections})
+                last_error = ""
         except Exception as error:  # report it and stay up: one bad frame or model mustn't need a restart
-            traceback.print_exc()
-            send_json(b"E", {"error": f"{type(error).__name__}: {error}"})
+            said = f"{type(error).__name__}: {error}"
+            if said != last_error:  # the same failure on every picture goes in the log once, not 30 times a second
+                traceback.print_exc()
+            last_error = said
+            send_json(b"E", {"error": said})
 
 
 if __name__ == "__main__":
