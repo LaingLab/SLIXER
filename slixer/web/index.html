@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slixer</title>
+<link rel="stylesheet" href="/static/style.css">
+<script type="importmap">
+{ "imports": { "three": "/static/vendor/three.module.js" } }
+</script>
+</head>
+<body class="mode-watch">
+
+<header>
+  <h1>Slixer <span>SO-101</span> <span id="version"></span></h1>
+  <div class="pills">
+    <span class="pill" id="pill-arm">connecting</span>
+    <span class="pill" id="pill-camera">no camera</span>
+    <span class="pill" id="pill-rate">&mdash;</span>
+  </div>
+  <div class="modes" role="radiogroup" aria-label="mode">
+    <button data-mode="watch" title="The model mirrors the real arm. Nothing is sent -- from Drive, this lets go of the arm.">Watch</button>
+    <button data-mode="plan" title="A virtual arm to pose and rehearse on. Nothing is sent.">Plan</button>
+    <button data-mode="drive" title="The model moves the real arm.">Drive</button>
+  </div>
+  <button id="estop" class="estop" title="End the program and hold the arm where it is (Esc)">STOP</button>
+</header>
+
+<div id="banner" class="hidden"></div>
+
+<main>
+  <section id="viewport">
+    <div id="canvas-holder"></div>
+    <div id="viewport-overlay">
+      <div id="mode-badge"></div>
+      <div id="tip-readout">tip &mdash;</div>
+      <div id="hint"></div>
+    </div>
+    <div id="camera-inset" class="hidden">
+      <img id="inset-image" alt="camera" draggable="false">
+      <div class="overlay" id="inset-overlay"></div>
+      <div id="inset-grip" title="drag to resize"></div>
+      <button id="inset-close" title="hide">&times;</button>
+    </div>
+    <div id="viewport-buttons">
+      <button id="btn-inset" title="show the camera over the model">camera</button>
+      <button id="btn-ghost" class="on" title="show where the real arm is when it differs from the model">ghost</button>
+      <button id="btn-home" title="frame the arm and the parts">recentre</button>
+    </div>
+  </section>
+
+  <aside id="panel">
+    <nav class="tabs">
+      <button data-tab="joints">Joints</button>
+      <button data-tab="program">Program</button>
+      <button data-tab="scene">Scene</button>
+      <button data-tab="camera">Camera</button>
+      <button data-tab="setup">Setup</button>
+    </nav>
+
+    <!-- ---------------------------------------------------------------- joints -->
+    <div class="tab" id="tab-joints">
+      <p class="hint" id="joints-hint"></p>
+      <div id="sliders"></div>
+      <div class="row">
+        <button id="zero-pose">zero pose</button>
+        <button id="match-arm" title="put the virtual arm where the real one is">match the real arm</button>
+      </div>
+    </div>
+
+    <!-- ---------------------------------------------------------------- program -->
+    <div class="tab hidden" id="tab-program">
+      <div class="row">
+        <input id="program-name" placeholder="program name" value="untitled" spellcheck="false">
+        <label class="check"><input type="checkbox" id="program-loop"> loop</label>
+        <span id="program-dirty" title="changed since it was last saved"></span>
+      </div>
+      <div class="toolbar">
+        <button id="add-move" class="primary" title="Record where the arm is now (R)">&#9679; record pose</button>
+        <button id="add-wait" title="Pause">+ wait</button>
+        <button id="add-gripper" title="Open or close the gripper">+ gripper</button>
+        <button id="add-waitfor" title="Wait until the camera sees something">+ wait for</button>
+      </div>
+      <p class="muted small">New steps go after the one selected. Select a move to see it in amber.</p>
+      <ol id="steps"></ol>
+      <div id="step-editor" class="card hidden"></div>
+      <div class="row transport">
+        <button id="play" class="primary" title="Play from the start">&#9654; play</button>
+        <button id="play-here" title="Play from the selected step">&#9654; from here</button>
+        <button id="stop-program">&#9632; stop</button>
+        <span id="program-length" class="muted small"></span>
+      </div>
+      <p class="muted" id="program-note"></p>
+      <div class="row">
+        <select id="saved-programs"></select>
+        <button id="open-program">open</button>
+        <button id="save-program">save</button>
+      </div>
+      <div class="row">
+        <button id="new-program">new</button>
+        <button id="delete-program">delete saved</button>
+      </div>
+    </div>
+
+    <!-- ---------------------------------------------------------------- scene -->
+    <div class="tab hidden" id="tab-scene">
+      <label id="drop" for="stl-file">
+        <strong>Import an STL</strong>
+        <span>drop one here, or click to choose &mdash; the bench, a fixture, the box you pick from</span>
+        <input type="file" id="stl-file" accept=".stl" hidden multiple>
+      </label>
+      <ul id="parts"></ul>
+      <div id="part-editor" class="hidden">
+        <div class="row"><input id="part-name" placeholder="name" spellcheck="false"></div>
+        <div class="place-grid">
+          <label>x</label><input type="number" id="part-x" step="5"><span class="unit">mm</span>
+          <label>y</label><input type="number" id="part-y" step="5"><span class="unit">mm</span>
+          <label>z</label><input type="number" id="part-z" step="5"><span class="unit">mm</span>
+          <label>turn</label><input type="number" id="part-yaw" step="5"><span class="unit">&deg; about z</span>
+          <label>tip</label><input type="number" id="part-pitch" step="5"><span class="unit">&deg; about y</span>
+          <label>roll</label><input type="number" id="part-roll" step="5"><span class="unit">&deg; about x</span>
+          <label>scale</label><input type="number" id="part-scale" step="0.1"><span class="unit">&times;</span>
+        </div>
+        <div class="row">
+          <button id="part-lie-flat" title="turn it so its thinnest side is vertical, and set it on the floor">lie flat</button>
+          <button id="part-to-floor" title="drop it straight down onto the floor">sit on the floor</button>
+          <button id="part-remove">remove</button>
+        </div>
+        <p class="muted small" id="part-note"></p>
+      </div>
+      <div class="card">
+        <strong>Send the gripper to a part</strong>
+        <p class="muted small">In Plan or Drive, double-click any part's surface and the gripper goes there,
+          stopping <input type="number" id="approach" value="20" min="0" max="200" step="5" class="inline">
+          mm short of it along the surface. Then record the pose.</p>
+      </div>
+      <p class="muted small">Parts are drawn, not felt: the arm doesn't know they are there and will not
+        stop for them.</p>
+    </div>
+
+    <!-- ---------------------------------------------------------------- camera -->
+    <div class="tab hidden" id="tab-camera">
+      <div class="row">
+        <input id="camera-host" placeholder="the Pi's address, e.g. 192.168.1.50" spellcheck="false">
+        <button id="camera-connect">connect</button>
+      </div>
+      <div class="camera-frame" id="camera-frame">
+        <img id="camera-image" alt="camera" draggable="false">
+        <div class="overlay" id="camera-overlay"></div>
+        <div id="camera-placeholder">no picture yet &mdash; start the stream on the Pi:
+          <code>python pi/camera_stream.py</code></div>
+      </div>
+      <div id="model-section">
+        <h3>Model</h3>
+        <div class="row">
+          <label class="check big"><input type="checkbox" id="model-on"> run</label>
+          <select id="model-name" title="-seg models outline what they find; the others only box it"></select>
+        </div>
+        <label class="field">sure enough at <input type="range" id="model-conf" min="5" max="95" step="5" value="35">
+          <output id="model-conf-value">35%</output></label>
+        <label class="field"><span id="model-classes-label">only</span> <input id="model-classes" placeholder="everything it knows (or e.g. cup, bottle)" spellcheck="false"></label>
+        <p class="muted small" id="model-note">A YOLO model, running on this PC's GPU in a process of its own.
+          What it finds is outlined on the picture and counts for <em>wait for</em> steps.</p>
+      </div>
+
+      <div id="dataset-section">
+        <h3>Training pictures</h3>
+        <p class="muted small">For teaching a model your own things. Each picture is saved as the camera sent
+          it, with the arm's pose; with a model running, what it saw is saved as draft labels to correct.
+          Then see <code>slixer/VISION.md</code>.</p>
+        <div class="row">
+          <input id="dataset-name" placeholder="dataset name" spellcheck="false" value="lab">
+          <label class="check"><input type="checkbox" id="dataset-prelabel" checked> draft labels</label>
+        </div>
+        <div class="row">
+          <button id="capture" class="primary" title="save the camera's picture now (C)">capture</button>
+          <label class="field">every <select id="capture-every">
+            <option value="0">never</option><option value="1">1 s</option><option value="2">2 s</option>
+            <option value="5">5 s</option><option value="10">10 s</option></select></label>
+        </div>
+        <p class="muted small" id="dataset-note"></p>
+      </div>
+    </div>
+
+    <!-- ---------------------------------------------------------------- setup -->
+    <div class="tab hidden" id="tab-setup">
+      <div id="setup-status" class="card"></div>
+      <table id="mapping-table">
+        <thead><tr><th>joint</th><th>arm</th><th>model</th><th></th><th>offset</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="gripper-map">
+        <span>gripper: model angle when shut</span>
+        <input type="number" id="grip-closed" step="1" class="inline">&deg;
+        <span>and open</span>
+        <input type="number" id="grip-open" step="1" class="inline">&deg;
+      </div>
+      <div class="row">
+        <button id="zero-here" title="take the real arm's pose as the model's zero pose">this pose is zero</button>
+        <button id="save-mapping" class="primary">save</button>
+      </div>
+      <details open>
+        <summary>How to line the model up with your arm</summary>
+        <ol class="howto">
+          <li>Be in <b>Watch</b>, with the arm reporting (the pill at the top left says what it is doing).</li>
+          <li>Move one joint by hand at a time. Its <b>arm</b> reading changes, and the model should turn the
+            same way.</li>
+          <li>If it turns the <b>wrong way</b>, press <b>flip</b> for that joint.</li>
+          <li>If it turns the right way but <b>sits at an angle</b>, type an offset until the model matches.</li>
+          <li>Or put the real arm where the model's zero pose is (Joints &rarr; zero pose, in Plan, shows it)
+            and press <b>this pose is zero</b> to set every offset at once. Get the signs right first.</li>
+          <li>Press <b>save</b>. It's kept in <code>slixer/mapping.json</code>.</li>
+        </ol>
+        <p class="muted small">Recorded programs replay correctly even before this is done &mdash; they
+          store the arm's own angles and turn them back the same way. Lining up matters for the picture,
+          for dragging the gripper, and for sending it to a part.</p>
+      </details>
+    </div>
+  </aside>
+</main>
+
+<footer>
+  <span id="status">starting&hellip;</span>
+  <span id="pose-readout"></span>
+</footer>
+
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

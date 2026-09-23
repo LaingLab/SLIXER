@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Your own data. Slixer keeps it beside its code unless it's started with --data.
+/slixer/programs/
+/slixer/scene/
+/slixer/datasets/
+/slixer/mapping.json
+/slixer/settings.json
+/slixer/vision.json
+/slixer/*.tmp
+/slixer/*.log
+
+# Model weights: large, and the stock ones download on first use. Trained ones are yours.
+/slixer/models/*
+!/slixer/models/README.md
+
+# The SO-101's original STLs: only needed to re-bake slixer/web/models (see slixer/assets/so101/README.md).
+/slixer/assets/so101/assets/
+
+# Your Wi-Fi password. Copy wifi_config.example.h to wifi_config.h and fill that in.
+wifi_config.h

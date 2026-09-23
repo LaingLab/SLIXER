@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+title: "Slixer: a browser workbench for the SO-101 robot arm"
+message: >-
+  If you use this software, please cite it.
+type: software
+authors:
+  - name: Laing Lab
+    address: University of Mississippi
+version: 0.1.0b1
+license: MIT
+repository-code: 'https://github.com/LaingLab/SLIXER'
+url: 'https://github.com/LaingLab/SLIXER'
+abstract: >-
+  Slixer is a browser-based workbench for the SO-101 robot arm. It shows a
+  live 3D model that mirrors the arm, records programs by demonstration and
+  plays them back, imports CAD parts to program around, and runs YOLO
+  detection and segmentation on a camera beside the arm, so that a program
+  can wait on what the camera sees. It includes firmware for wireless
+  leader-follower teleoperation on XIAO ESP32-C3 boards.
+keywords:
+  - robotics
+  - SO-101
+  - robot arm
+  - laboratory automation
+  - computer vision
+  - open-source scientific software

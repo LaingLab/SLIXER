@@ -1,0 +1,58 @@
+[project]
+name = "slixer"
+version = "0.1.0b1"
+description = "A browser workbench for the SO-101 robot arm: a live 3D model, programs, the camera and YOLO"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "LaingLab" }]
+keywords = ["robotics", "so-101", "robot arm", "yolo", "laboratory automation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "websockets>=12",
+    "python-multipart>=0.0.9",
+    "numpy>=1.26",
+    "opencv-python-headless>=4.8",
+    "trimesh>=4.0",
+    "fast-simplification>=0.1.7",
+]
+
+[project.optional-dependencies]
+# YOLO models on the camera: uv sync --extra vision. It brings PyTorch -- a few GB, the CUDA build on Linux.
+vision = [
+    "ultralytics>=8.4",
+    # YOLOE's text encoder, which Ultralytics would otherwise pip-install by itself the first time it's needed.
+    "clip @ git+https://github.com/ultralytics/CLIP.git",
+]
+
+[project.urls]
+Homepage = "https://github.com/LaingLab/SLIXER"
+Issues = "https://github.com/LaingLab/SLIXER/issues"
+Changelog = "https://github.com/LaingLab/SLIXER/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[tool.uv]
+package = false  # an application, run where it is: nothing to build or install
+override-dependencies = [
+    # Ultralytics asks for the full opencv-python. Slixer has opencv-python-headless: the same cv2, without a
+    # desktop's GUI libraries. Installed together the two overwrite each other's files, so headless only.
+    "opencv-python; sys_platform == 'never'",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["slixer/tests"]

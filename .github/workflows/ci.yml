@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel in-flight CI for outdated commits on the same PR/branch.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        run: pip install uv
+
+      # The core only. The vision extra is PyTorch, a few GB, and its tests need a GPU and downloaded
+      # weights; without them they skip.
+      - name: Install
+        run: uv sync --locked --python ${{ matrix.python-version }}
+
+      - name: Test
+        run: uv run --locked pytest -q
+
+  firmware:
+    name: Firmware builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The Arduino IDE builds each sketch from its own folder, so the shared headers are copied into
+      # both. They must stay identical.
+      - name: Shared headers match
+        run: |
+          for header in feetech.h link.h ranges.h serial_port.h teleop_math.h wifi_config.example.h; do
+            diff so101_leader/$header so101_follower/$header
+          done
+
+      - name: Install arduino-cli and the ESP32 core
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR=$HOME/bin sh
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/bin:$PATH"
+          arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install esp32:esp32@3.3.8 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+
+      # With no wifi_config.h, as in any fresh clone: the boards fall back to the radio link only.
+      - name: Build both sketches
+        run: |
+          for sketch in so101_leader so101_follower; do
+            arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32C3 --warnings all "$sketch"
+          done
